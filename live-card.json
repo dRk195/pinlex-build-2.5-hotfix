@@ -1,0 +1,84 @@
+{
+  "firstName": "Шахмурат",
+  "lastName": "Сайдуллаев",
+  "role": "Junior Web-coder",
+  "company": "pinlex.work",
+  "location": "Казахстан",
+  "statusText": "Открыт к новым проектам и заказам",
+  "verified": true,
+  "showStatusDot": true,
+  "isAdmin": true,
+  "showAdminBadge": true,
+  "isPro": true,
+  "showProBadge": true,
+  "bio": "Junior Web-coder. Создаю современные, быстрые и удобные веб-сайты, лендинги и интерактивные онлайн-визитки.",
+  "phone": "+77754536966",
+  "phone2": "+77019392122",
+  "email": "shakhmurat.s@gmail.com",
+  "website": "https://github.com/dRk195",
+  "ctaLabel": "Написать в Telegram",
+  "ctaUrl": "https://t.me/ssshakh195",
+  "showSaveVcf": true,
+  "enableExchange": true,
+  "theme": "midnight",
+  "layout": "centered",
+  "avatarShape": "circle",
+  "fontPair": "discord_gg",
+  "nameEffect": "none",
+  "buttonStyle": "filled",
+  "borderRadius": 16,
+  "bgPattern": "glow",
+  "socialDisplay": "list",
+  "socials": {
+    "telegram": "https://t.me/ssshakh195",
+    "whatsapp": "+77019392122",
+    "instagram": "@cv_bng",
+    "github": "dRk195"
+  },
+  "customLinks": [
+    {
+      "icon": "📞",
+      "title": "Основной телефон: +7 775 453-69-66",
+      "subtitle": "Только для телефонных звонков",
+      "url": "tel:+77754536966",
+      "highlight": true
+    },
+    {
+      "icon": "💬",
+      "title": "WhatsApp: +7 701 939-21-22",
+      "subtitle": "Дополнительный номер — написать в WhatsApp",
+      "url": "https://wa.me/77019392122",
+      "highlight": false
+    },
+    {
+      "icon": "✉️",
+      "title": "Почта Gmail: shakhmurat.s@gmail.com",
+      "subtitle": "Открыть окно нового сообщения в Gmail",
+      "url": "https://mail.google.com/mail/?view=cm&fs=1&to=shakhmurat.s@gmail.com",
+      "highlight": false
+    }
+  ],
+  "stats": [
+    { "value": "HTML/CSS", "label": "чистая вёрстка" },
+    { "value": "JS / Web", "label": "интерактив" },
+    { "value": "100%", "label": "адаптивность" }
+  ],
+  "services": [
+    {
+      "title": "Создание онлайн-визитки / лендинга",
+      "price": "Договорная",
+      "desc": "Современный адаптивный сайт для телефона и ПК с уникальным дизайном и быстрой загрузкой."
+    },
+    {
+      "title": "Вёрстка и доработка веб-страниц",
+      "price": "Договорная",
+      "desc": "Аккуратная вёрстка по макету, настройка анимаций, форм и мобильной версии."
+    }
+  ],
+  "faqs": [
+    {
+      "q": "Как со мной быстрее всего связаться?",
+      "a": "Пишите в Telegram (@ssshakh195), в WhatsApp (+7 701 939-21-22) или звоните на основной номер (+7 775 453-69-66)!"
+    }
+  ]
+}

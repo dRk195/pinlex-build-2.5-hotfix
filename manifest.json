@@ -1,0 +1,10 @@
+{
+  "name": "pinlex.work — Цифровые визитки (Build 2.2 Ecosystem)",
+  "short_name": "pinlex.work",
+  "description": "Экосистема создания и синхронизации цифровых визиток для ПК и смартфона.",
+  "start_url": "./mobile.html",
+  "display": "standalone",
+  "background_color": "#0b0d13",
+  "theme_color": "#6366f1",
+  "orientation": "portrait-primary"
+}
