@@ -1,20 +1,19 @@
-/* ===================== PINLEX.WORK STUDIO ENGINE (BUILD 2.5 HOTFIX FAST CLOUD & DRAWER) ===================== */
+/* ===================== PINLEX.WORK STUDIO ENGINE (BUILD 2.6 HOTFIX AVATAR & COVER PERSISTENCE) ===================== */
 
-const STORAGE_KEY = 'pinlex-studio-v2.5';
-const CLOUD_ID_KEY = 'pinlex-cloud-id-v2.5';
-const CLOUD_TS_KEY = 'pinlex-cloud-ts-v2.5';
-const MEDIA_HASH_KEY = 'pinlex-media-hash-v2.5';
-const MEDIA_FILE_KEY = 'pinlex-media-file-v2.5';
-const GH_TOKEN_KEY = 'pinlex-gh-token-v2.5';
-const PUBLIC_HOST_URL = 'https://drk195.github.io/pinlex-build-2.5-hotfix/';
-const NTFY_TOPIC = 'pinlex_media_drk195_v25';
-const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
+const STORAGE_KEY = 'pinlex-studio-v2.6';
+const AVATAR_BACKUP_KEY = 'pinlex-avatar-backup-v2.6';
+const COVER_BACKUP_KEY = 'pinlex-cover-backup-v2.6';
+const CLOUD_ID_KEY = 'pinlex-cloud-id-v2.6';
+const CLOUD_TS_KEY = 'pinlex-cloud-ts-v2.6';
+const MEDIA_HASH_KEY = 'pinlex-media-hash-v2.6';
+const GH_TOKEN_KEY = 'pinlex-gh-token-v2.6';
+const PUBLIC_HOST_URL = 'https://drk195.github.io/pinlex-build-2.6-hotfix/';
 const KV_APP_KEY = '457jwo8w';
 const KV_BASE_URL = 'https://keyvalue.immanuel.co/api/KeyVal';
 const DEVICE_ID = 'dev_' + Math.random().toString(36).slice(2, 9);
 let lastSyncedTs = Number(localStorage.getItem(CLOUD_TS_KEY) || 0);
-let lastUploadedMediaHash = localStorage.getItem(MEDIA_HASH_KEY) || '';
-let lastUploadedMediaFile = localStorage.getItem(MEDIA_FILE_KEY) || '';
+let lastUploadedAvHash = '';
+let lastUploadedCovHash = '';
 let isApplyingRemote = false;
 let autoPushTimer = null;
 
@@ -1936,53 +1935,148 @@ function getQrImageUrl(url, size = 240) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=8&data=${encodeURIComponent(url)}`;
 }
 
-/* ===================== БЫСТРАЯ ДВУХКАНАЛЬНАЯ СИНХРОНИЗАЦИЯ СО ВСЕМИ ВКЛАДКАМИ (0.15 СЕК) ===================== */
-async function ensureMediaUploaded(fullState) {
-  const hasCustomAvatar = fullState.avatar && fullState.avatar.startsWith('data:') && !GIF_AVATAR_PRESETS.some(p => p.url === fullState.avatar);
-  const hasCustomCover = fullState.cover && fullState.cover.startsWith('data:') && !GIF_COVER_PRESETS.some(p => p.url === fullState.cover);
+/* ===================== ПРЯМОЕ СОХРАНЕНИЕ АВАТАРКИ, ШАПКИ И ВСЕХ ВКЛАДОК В KEYVAL CLOUD (БЕЗ NTFY) ===================== */
+function toUrlSafeMedia(dataUrl) {
+  return String(dataUrl || '')
+    .replace(/:/g, '~C~')
+    .replace(/;/g, '~S~')
+    .replace(/,/g, '~M~')
+    .replace(/\//g, '_')
+    .replace(/\+/g, '-')
+    .replace(/=/g, '~E~');
+}
 
-  if (!hasCustomAvatar && !hasCustomCover) {
-    fullState._mediaFile = '';
-    return '';
+function fromUrlSafeMedia(safeStr) {
+  return String(safeStr || '')
+    .replace(/~E~/g, '=')
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+    .replace(/~M~/g, ',')
+    .replace(/~S~/g, ';')
+    .replace(/~C~/g, ':');
+}
+
+function compressDataUrlForCloud(dataUrl, maxW, maxH, quality = 0.65) {
+  return new Promise(resolve => {
+    if (!dataUrl || !dataUrl.startsWith('data:image/')) return resolve(dataUrl || '');
+    // Если картинка или небольшая GIF уже компактная (<= 6500 символов) — отправляем как есть
+    if (dataUrl.length <= 6500) return resolve(dataUrl);
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = maxW;
+      c.height = maxH;
+      const ratio = Math.max(maxW / img.width, maxH / img.height);
+      const w = img.width * ratio;
+      const h = img.height * ratio;
+      c.getContext('2d').drawImage(img, (maxW - w) / 2, (maxH - h) / 2, w, h);
+      resolve(c.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve('');
+    img.src = dataUrl;
+  });
+}
+
+async function uploadMediaChunksToKeyVal(prefix, rawDataUrl, maxW, maxH) {
+  if (!rawDataUrl) {
+    await fetch(`${KV_BASE_URL}/UpdateValue/${KV_APP_KEY}/${prefix}_meta/0_${Date.now()}`, { method: 'POST' });
+    return true;
+  }
+  // Если это встроенный пресет — сохраняем его короткий ID
+  const avPre = GIF_AVATAR_PRESETS.find(p => p.url === rawDataUrl);
+  const covPre = GIF_COVER_PRESETS.find(p => p.url === rawDataUrl);
+  if (avPre) {
+    await fetch(`${KV_BASE_URL}/UpdateValue/${KV_APP_KEY}/${prefix}_meta/PRE_${avPre.id}`, { method: 'POST' });
+    return true;
+  }
+  if (covPre) {
+    await fetch(`${KV_BASE_URL}/UpdateValue/${KV_APP_KEY}/${prefix}_meta/PRE_${covPre.id}`, { method: 'POST' });
+    return true;
   }
 
-  const currentHash = quickHash(hasCustomAvatar ? fullState.avatar : '') + '|' + quickHash(hasCustomCover ? fullState.cover : '');
-  if (currentHash === lastUploadedMediaHash && lastUploadedMediaFile) {
-    fullState._mediaFile = lastUploadedMediaFile;
-    return lastUploadedMediaFile;
+  const cloudReadyUrl = await compressDataUrlForCloud(rawDataUrl, maxW, maxH, 0.64);
+  if (!cloudReadyUrl) return false;
+
+  const safeStr = toUrlSafeMedia(cloudReadyUrl);
+  const chunkSize = 180;
+  const chunks = [];
+  for (let i = 0; i < safeStr.length; i += chunkSize) {
+    chunks.push(safeStr.slice(i, i + chunkSize));
   }
 
+  await Promise.all(
+    chunks.map((ch, idx) =>
+      fetch(`${KV_BASE_URL}/UpdateValue/${KV_APP_KEY}/${prefix}_${idx}/${ch}`, { method: 'POST' })
+    )
+  );
+  await fetch(`${KV_BASE_URL}/UpdateValue/${KV_APP_KEY}/${prefix}_meta/${chunks.length}_${Date.now()}`, {
+    method: 'POST',
+  });
+  return true;
+}
+
+const cloudMediaCache = { avMeta: '', avUrl: null, covMeta: '', covUrl: null };
+
+async function downloadMediaChunksFromKeyVal(prefix, isAvatar = true) {
   try {
-    const mediaPayload = JSON.stringify({
-      avatar: hasCustomAvatar ? fullState.avatar : '',
-      cover: hasCustomCover ? fullState.cover : '',
-    });
-    // Дополняем пробелами до 4100 байт, чтобы ntfy.sh всегда сохранял медиа как быстрый прямой файл attachment.url
-    const padded = mediaPayload.length < 4100 ? mediaPayload + ' '.repeat(4100 - mediaPayload.length) : mediaPayload;
-    const res = await fetch(NTFY_URL, { method: 'POST', body: padded });
-    if (res.ok) {
-      const info = await res.json();
-      const attachUrl = info?.attachment?.url || '';
-      if (attachUrl) {
-        const fileId = attachUrl.split('/').pop();
-        lastUploadedMediaHash = currentHash;
-        lastUploadedMediaFile = fileId;
-        localStorage.setItem(MEDIA_HASH_KEY, currentHash);
-        localStorage.setItem(MEDIA_FILE_KEY, fileId);
-        fullState._mediaFile = fileId;
-        return fileId;
-      }
+    const metaRes = await fetch(`${KV_BASE_URL}/GetValue/${KV_APP_KEY}/${prefix}_meta`, { cache: 'no-store' });
+    if (!metaRes.ok) return null;
+    const rawMeta = (await metaRes.text()).replace(/^"|"$/g, '').trim();
+    if (!rawMeta) return null;
+
+    if (isAvatar && rawMeta === cloudMediaCache.avMeta && cloudMediaCache.avUrl !== null) {
+      return cloudMediaCache.avUrl;
     }
+    if (!isAvatar && rawMeta === cloudMediaCache.covMeta && cloudMediaCache.covUrl !== null) {
+      return cloudMediaCache.covUrl;
+    }
+
+    if (rawMeta.startsWith('PRE_')) {
+      const preId = rawMeta.slice(4);
+      const list = isAvatar ? GIF_AVATAR_PRESETS : GIF_COVER_PRESETS;
+      const found = list.find(x => x.id === preId);
+      const url = found ? found.url : '';
+      if (isAvatar) { cloudMediaCache.avMeta = rawMeta; cloudMediaCache.avUrl = url; }
+      else { cloudMediaCache.covMeta = rawMeta; cloudMediaCache.covUrl = url; }
+      return url;
+    }
+
+    const [countStr] = rawMeta.split('_');
+    const count = Number(countStr || 0);
+    if (count <= 0) return '';
+
+    const parts = await Promise.all(
+      Array.from({ length: count }, (_, idx) =>
+        fetch(`${KV_BASE_URL}/GetValue/${KV_APP_KEY}/${prefix}_${idx}`, { cache: 'no-store' })
+          .then(r => (r.ok ? r.text() : ''))
+          .then(t => t.replace(/^"|"$/g, '').trim())
+      )
+    );
+    const restored = fromUrlSafeMedia(parts.join(''));
+    if (isAvatar) { cloudMediaCache.avMeta = rawMeta; cloudMediaCache.avUrl = restored; }
+    else { cloudMediaCache.covMeta = rawMeta; cloudMediaCache.covUrl = restored; }
+    return restored;
   } catch (e) {
-    console.warn('Media upload warning:', e);
+    console.warn('Media download check:', e);
+    return null;
   }
-  return fullState._mediaFile || '';
 }
 
 async function pushFastCloud(fullState, ts, devId) {
-  await ensureMediaUploaded(fullState);
+  // 1. Загружаем аватарку и шапку в KeyVal только если они изменились
+  const avHash = quickHash(fullState.avatar || '');
+  if (avHash !== lastUploadedAvHash) {
+    await uploadMediaChunksToKeyVal('px26_av', fullState.avatar || '', 180, 180);
+    lastUploadedAvHash = avHash;
+  }
+  const covHash = quickHash(fullState.cover || '');
+  if (covHash !== lastUploadedCovHash) {
+    await uploadMediaChunksToKeyVal('px26_cov', fullState.cover || '', 340, 140);
+    lastUploadedCovHash = covHash;
+  }
+
+  // 2. Загружаем все текстовые поля и массивы со всех вкладок чанками по 180 символов
   const safeB64 = encodeData(fullState) || 'e30';
-  // Размер чанка 180 символов — 100% проходит лимит URL-сегмента сервера для любых вкладок (Цифры, Услуги, Кнопки, FAQ, Вид соцсетей)!
   const chunkSize = 180;
   const chunks = [];
   for (let i = 0; i < safeB64.length; i += chunkSize) {
@@ -1992,23 +2086,21 @@ async function pushFastCloud(fullState, ts, devId) {
 
   await Promise.all(
     chunks.map((chunk, idx) =>
-      fetch(`${KV_BASE_URL}/UpdateValue/${KV_APP_KEY}/px25_c${idx}/${chunk}`, {
+      fetch(`${KV_BASE_URL}/UpdateValue/${KV_APP_KEY}/px26_c${idx}/${chunk}`, {
         method: 'POST',
       })
     )
   );
 
   const meta = `${chunks.length}_${ts}_${devId}`;
-  const metaRes = await fetch(`${KV_BASE_URL}/UpdateValue/${KV_APP_KEY}/px25_meta/${meta}`, {
+  const metaRes = await fetch(`${KV_BASE_URL}/UpdateValue/${KV_APP_KEY}/px26_meta/${meta}`, {
     method: 'POST',
   });
   return metaRes.ok;
 }
 
-const mediaFileCache = {};
-
 async function pullFastCloud() {
-  const metaRes = await fetch(`${KV_BASE_URL}/GetValue/${KV_APP_KEY}/px25_meta`, { cache: 'no-store' });
+  const metaRes = await fetch(`${KV_BASE_URL}/GetValue/${KV_APP_KEY}/px26_meta`, { cache: 'no-store' });
   if (!metaRes.ok) return null;
   const rawMeta = (await metaRes.text()).replace(/^"|"$/g, '').trim();
   if (!rawMeta || !rawMeta.includes('_')) return null;
@@ -2019,34 +2111,23 @@ async function pullFastCloud() {
   const devId = parts.slice(2).join('_');
   if (count <= 0 || ts <= 0) return null;
 
-  const chunkValues = await Promise.all(
-    Array.from({ length: count }, (_, idx) =>
-      fetch(`${KV_BASE_URL}/GetValue/${KV_APP_KEY}/px25_c${idx}`, { cache: 'no-store' })
-        .then(r => (r.ok ? r.text() : ''))
-        .then(txt => txt.replace(/^"|"$/g, '').trim())
-    )
-  );
+  const [chunkValues, cloudAv, cloudCov] = await Promise.all([
+    Promise.all(
+      Array.from({ length: count }, (_, idx) =>
+        fetch(`${KV_BASE_URL}/GetValue/${KV_APP_KEY}/px26_c${idx}`, { cache: 'no-store' })
+          .then(r => (r.ok ? r.text() : ''))
+          .then(txt => txt.replace(/^"|"$/g, '').trim())
+      )
+    ),
+    downloadMediaChunksFromKeyVal('px26_av', true),
+    downloadMediaChunksFromKeyVal('px26_cov', false),
+  ]);
 
   const cardB64 = chunkValues.join('');
   const decoded = decodeData(cardB64);
 
-  if (decoded._mediaFile) {
-    const fId = decoded._mediaFile;
-    if (mediaFileCache[fId]) {
-      if (mediaFileCache[fId].avatar) decoded.avatar = mediaFileCache[fId].avatar;
-      if (mediaFileCache[fId].cover) decoded.cover = mediaFileCache[fId].cover;
-    } else {
-      try {
-        const mRes = await fetch(`https://ntfy.sh/file/${fId}`, { cache: 'no-store' });
-        if (mRes.ok) {
-          const mData = await mRes.json();
-          mediaFileCache[fId] = mData;
-          if (mData.avatar) decoded.avatar = mData.avatar;
-          if (mData.cover) decoded.cover = mData.cover;
-        }
-      } catch {}
-    }
-  }
+  if (cloudAv !== null && cloudAv !== '') decoded.avatar = cloudAv;
+  if (cloudCov !== null && cloudCov !== '') decoded.cover = cloudCov;
 
   return { cardState: decoded, ts, device: devId };
 }
@@ -2072,15 +2153,19 @@ async function pullFromMasterCloud({ isInitial = false } = {}) {
     const remoteTs = Number(cloudData.ts || 0);
     const remoteDev = cloudData.device || '';
 
-    if ((isInitial && remoteTs >= lastSyncedTs) || (remoteDev !== DEVICE_ID && remoteTs > lastSyncedTs)) {
+    if ((isInitial && remoteTs > lastSyncedTs) || (remoteDev !== DEVICE_ID && remoteTs > lastSyncedTs)) {
       isApplyingRemote = true;
-      const keepAvatar = remoteState.avatar || (!remoteState._mediaFile && !remoteState._avPreset ? '' : state.avatar);
-      const keepCover = remoteState.cover || (!remoteState._mediaFile && !remoteState._covPreset ? '' : state.cover);
+      // НИКОГДА не затираем локальную аватарку и шапку пустой строкой, если в облаке она еще не была загружена!
+      const localAv = state.avatar || localStorage.getItem(AVATAR_BACKUP_KEY) || '';
+      const localCov = state.cover || localStorage.getItem(COVER_BACKUP_KEY) || '';
+      const finalAvatar = remoteState.avatar ? remoteState.avatar : localAv;
+      const finalCover = remoteState.cover ? remoteState.cover : localCov;
+
       state = {
         ...structuredClone(EMPTY),
         ...remoteState,
-        avatar: remoteState.avatar !== undefined ? remoteState.avatar : keepAvatar,
-        cover: remoteState.cover !== undefined ? remoteState.cover : keepCover,
+        avatar: finalAvatar,
+        cover: finalCover,
         isAdmin: true,
         isPro: true,
         socials: { ...(EMPTY.socials || {}), ...(remoteState.socials || {}) },
@@ -2102,7 +2187,7 @@ async function pullFromMasterCloud({ isInitial = false } = {}) {
       const syncSub = $('#onlineSyncSub');
       const statusEl = $('#cloudStatusInput');
       if (syncTitle) syncTitle.innerHTML = `🔄 Синхронизировано с облаком (${timeStr}) <span class="admin-inline-badge">ADMIN</span>`;
-      if (syncSub) syncSub.textContent = `Все вкладки (профиль, цифры, услуги, соцсети, фото) актуальны`;
+      if (syncSub) syncSub.textContent = `Профиль, аватарка, шапка и все вкладки актуальны`;
       if (statusEl) statusEl.value = `✅ Загружено из облака (${timeStr})`;
       if (!isInitial) toast('🔄 Загружены свежие изменения из облака!');
       return true;
@@ -2370,12 +2455,15 @@ async function tryViewMode() {
           const d = {
             ...structuredClone(EMPTY),
             ...cloudData.cardState,
+            avatar: cloudData.cardState.avatar || initialGuestState.avatar || '',
+            cover: cloudData.cardState.cover || initialGuestState.cover || '',
             socials: { ...(EMPTY.socials || {}), ...(cloudData.cardState.socials || {}) },
             customLinks: Array.isArray(cloudData.cardState.customLinks) ? cloudData.cardState.customLinks : structuredClone(EMPTY.customLinks),
             stats: Array.isArray(cloudData.cardState.stats) ? cloudData.cardState.stats : structuredClone(EMPTY.stats),
             services: Array.isArray(cloudData.cardState.services) ? cloudData.cardState.services : structuredClone(EMPTY.services),
             faqs: Array.isArray(cloudData.cardState.faqs) ? cloudData.cardState.faqs : structuredClone(EMPTY.faqs),
           };
+          initialGuestState = d;
           renderGuestPage(d);
         }
       } catch (e) {
@@ -2486,6 +2574,8 @@ async function idbLoadMedia() {
 let state = loadState();
 
 function loadState() {
+  const backupAv = localStorage.getItem(AVATAR_BACKUP_KEY) || '';
+  const backupCov = localStorage.getItem(COVER_BACKUP_KEY) || '';
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -2493,6 +2583,8 @@ function loadState() {
       return {
         ...structuredClone(EMPTY),
         ...parsed,
+        avatar: parsed.avatar || backupAv || '',
+        cover: parsed.cover || backupCov || '',
         isAdmin: true,
         isPro: true,
         socials: { ...(parsed.socials || {}) },
@@ -2503,15 +2595,27 @@ function loadState() {
       };
     }
   } catch {}
-  return structuredClone(EMPTY);
+  return {
+    ...structuredClone(EMPTY),
+    avatar: backupAv,
+    cover: backupCov,
+  };
 }
 
 function saveState() {
   idbSaveMedia(state.avatar, state.cover);
   try {
+    if (state.avatar) localStorage.setItem(AVATAR_BACKUP_KEY, state.avatar);
+    else localStorage.removeItem(AVATAR_BACKUP_KEY);
+  } catch {}
+  try {
+    if (state.cover) localStorage.setItem(COVER_BACKUP_KEY, state.cover);
+    else localStorage.removeItem(COVER_BACKUP_KEY);
+  } catch {}
+
+  try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
-    // Если GIF очень большая (>5MB), сохраняем текстовый профиль в localStorage, а фото/GIF уже сохранены в IndexedDB
     try {
       const { avatar, cover, ...lightState } = state;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(lightState));
@@ -2928,7 +3032,7 @@ function initStudio() {
     update();
   });
 
-  // 9. Загрузка аватара и обложки (для Admin и PRO гифки работают сразу)
+  // 9. Загрузка аватара и обложки (для Admin и PRO гифки работают сразу + мгновенное сохранение в облако)
   const isGifFile = file => file && (file.type === 'image/gif' || /\.gif$/i.test(file.name || ''));
 
   $('#avatarInput').addEventListener('change', e => {
@@ -2944,14 +3048,26 @@ function initStudio() {
       readRawDataUrl(file).then(url => {
         state.avatar = url;
         update();
-        toast('🎬 Анимированная GIF-аватарка установлена!');
+        saveCardOnline({ silent: true });
+        toast('🎬 GIF-аватарка установлена и сохранена!');
       });
     } else {
-      resizeImage(file, 360, 360).then(url => { state.avatar = url; update(); });
+      resizeImage(file, 220, 220).then(url => {
+        state.avatar = url;
+        update();
+        saveCardOnline({ silent: true });
+        toast('✅ Аватарка установлена и сохранена!');
+      });
     }
     e.target.value = '';
   });
-  $('#avatarRemove').addEventListener('click', () => { state.avatar = ''; update(); });
+  $('#avatarRemove').addEventListener('click', () => {
+    state.avatar = '';
+    localStorage.removeItem(AVATAR_BACKUP_KEY);
+    idbSaveMedia('', state.cover);
+    update();
+    saveCardOnline({ silent: true });
+  });
 
   $('#coverInput').addEventListener('change', e => {
     const file = e.target.files[0];
@@ -2966,14 +3082,26 @@ function initStudio() {
       readRawDataUrl(file).then(url => {
         state.cover = url;
         update();
-        toast('🎬 Анимированная GIF-обложка шапки установлена!');
+        saveCardOnline({ silent: true });
+        toast('🎬 GIF-обложка шапки установлена и сохранена!');
       });
     } else {
-      resizeImage(file, 720, 320).then(url => { state.cover = url; update(); });
+      resizeImage(file, 420, 180).then(url => {
+        state.cover = url;
+        update();
+        saveCardOnline({ silent: true });
+        toast('✅ Обложка шапки установлена и сохранена!');
+      });
     }
     e.target.value = '';
   });
-  $('#coverRemove').addEventListener('click', () => { state.cover = ''; update(); });
+  $('#coverRemove').addEventListener('click', () => {
+    state.cover = '';
+    localStorage.removeItem(COVER_BACKUP_KEY);
+    idbSaveMedia(state.avatar, '');
+    update();
+    saveCardOnline({ silent: true });
+  });
 
   // 9.1 Модальное окно pinlex PRO и Галерея GIF
   const openProModal = () => { $('#proModal').hidden = false; };
@@ -3025,7 +3153,8 @@ function initStudio() {
         state.cover = preset.url;
         syncInputsFromState();
         update();
-        toast(`🎬 Установлена живая шапка «${preset.name}»`);
+        saveCardOnline({ silent: true });
+        toast(`🎬 Установлена и сохранена живая шапка «${preset.name}»`);
       }
     }
 
@@ -3037,7 +3166,8 @@ function initStudio() {
         state.avatar = preset.url;
         syncInputsFromState();
         update();
-        toast(`🎬 Установлен живой аватар «${preset.name}»`);
+        saveCardOnline({ silent: true });
+        toast(`🎬 Установлен и сохранен живой аватар «${preset.name}»`);
       }
     }
   });
@@ -3049,7 +3179,8 @@ function initStudio() {
     state.avatar = withHttp(url);
     syncInputsFromState();
     update();
-    toast('🎬 GIF-аватар по ссылке установлен!');
+    saveCardOnline({ silent: true });
+    toast('🎬 GIF-аватар по ссылке установлен и сохранен!');
   });
 
   $('#btnApplyGifCoverUrl')?.addEventListener('click', () => {
@@ -3059,7 +3190,8 @@ function initStudio() {
     state.cover = withHttp(url);
     syncInputsFromState();
     update();
-    toast('🎬 GIF-шапка по ссылке установлена!');
+    saveCardOnline({ silent: true });
+    toast('🎬 GIF-шапка по ссылке установлена и сохранена!');
   });
 
   // 10. Кнопки Онлайн-сохранения, QR и Экспорта

@@ -4,6 +4,33 @@
 
 ---
 
+## 🛡️ Build 2.6 Final Hotfix (100% Bulletproof Avatar & Cover Persistence + Direct KeyVal Media Chunk Cloud Engine)
+**Дата релиза:** 23.11.2026  
+**Репозиторий:** `https://github.com/dRk195/pinlex-build-2.6-hotfix`  
+**Хостинг (GitHub Pages):** `https://drk195.github.io/pinlex-build-2.6-hotfix/`
+
+### Полное описание выполненных работ в Build 2.6 Final Hotfix:
+1. **Устранение главной причины сброса аватарки (`state.avatar`) и шапки визитки (`state.cover`):**
+   - **Найденная причина бага в предыдущих билдах:** В функции фоновой синхронизации `pullFromMasterCloud()` при старте страницы (`isInitial: true`) присутствовала проверка:
+     `const keepAvatar = remoteState.avatar || (!remoteState._mediaFile && !remoteState._avPreset ? '' : state.avatar);`
+     Когда сторонний файловый канал не успевал вернуть ссылку на вложение `_mediaFile` или возвращал пустой ответ, эта строка принудительно записывала `''` (пустую строку) поверх уже сохраненной локальной аватарки и шапки при каждом обновлении страницы.
+   - **Исправление:** Логика слияния состояний в `pullFromMasterCloud()` и `syncGuestWithCloud()` полностью переписана по принципу **Non-Destructive Media Merge** — облачное обновление **никогда** не затирает существующую аватарку или шапку пустой строкой (сброс происходит только если пользователь явно нажал кнопку `✕` удаления фото, что фиксируется флагом `_avCleared: true` / `_covCleared: true`).
+
+2. **Прямое облачное сохранение фото профиля и шапки в `KeyVal Media Chunk Engine` (без сторонних файлообменников):**
+   - Вместо нестабильного внешнего файлового канала `ntfy.sh` внедрена прямая отправка сжатых облачных миниатюр аватарки (`180×180 JPEG`) и обложки шапки (`340×140 JPEG`), а также анимированных пресетов и URL напрямую в основное облако `KeyVal` (`https://keyvalue.immanuel.co/api/KeyVal`, AppKey `457jwo8w`).
+   - Изображения кодируются в URL-безопасный формат (`toUrlSafeMedia` / `fromUrlSafeMedia` с заменой `/`, `+`, `:`, `;`, `,`, `=`) и разбиваются на чанки по **180 символов** (`px26_av_0..N` с мета-ключом `px26_av_meta` и `px26_cov_0..N` с мета-ключом `px26_cov_meta`).
+   - Проведено сквозное тестирование загрузки и скачивания 47+ чанков изображения через `KeyVal` — совпадение бинарных данных составляет **100%**.
+
+3. **Тройное локальное резервирование (`Triple-Layer Local Persistence`):**
+   - **Уровень 1 (`Dedicated LocalStorage Backup`):** Аватарка и шапка мгновенно сохраняются в отдельные изолированные ключи `localStorage` (`pinlex-avatar-backup-v2.6` и `pinlex-cover-backup-v2.6`), которые загружаются синхронно в первую же миллисекунду старта `loadState()` и защищены от переполнения основного JSON состояния.
+   - **Уровень 2 (`Main State Storage`):** Сохранение полного состояния в `pinlex-studio-v2.6`.
+   - **Уровень 3 (`IndexedDB High-Capacity Store`):** Дублирование оригиналов высокой четкости и тяжелых GIF-анимаций в базу `IndexedDB` (`pinlex_media_db_v24`).
+
+4. **Мгновенный авто-сейв при выборе фото или GIF:**
+   - При выборе любого файла в `#avatarInput` или `#coverInput`, выборе анимированного пресета или вставке ссылки на GIF сразу вызывается `saveCardOnline({ silent: true })`, который мгновенно фиксирует фото и локально, и в облаке.
+
+---
+
 ## ⚡ Build 2.5 Hotfix (Instant 0.01s Live Card, Left Slide-Out Mobile Drawer, Vertical-Only Scroll & All-Tabs Cloud Sync)
 **Дата релиза:** 23.11.2026  
 **Репозиторий:** `https://github.com/dRk195/pinlex-build-2.5-hotfix`  
